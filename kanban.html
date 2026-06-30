@@ -243,25 +243,37 @@ let editingId = null;
 let draggedCard = null;
 
 const DEFAULT_TASKS = [
-  { id: 1, title: 'Research competitor landing pages', desc: 'Audit top 5 competitor homepages and extract key messaging patterns.', column: 'backlog', tags: ['outreach'] },
-  { id: 2, title: 'Design system token refresh', desc: 'Update color and spacing tokens for v3 design system.', column: 'backlog', tags: ['website'] },
-  { id: 3, title: 'Onboarding flow redesign', desc: 'Redesign the first-time user experience to improve activation rate.', column: 'todo', tags: ['website'] },
-  { id: 4, title: 'Fix dark mode contrast', desc: 'WCAG AA violations on dashboard cards.', column: 'todo', tags: ['website'] },
-  { id: 5, title: 'API rate limiting middleware', desc: 'Add token bucket limiter to all public endpoints.', column: 'inprogress', tags: ['job_search'] },
-  { id: 6, title: 'Auth service migration', desc: 'Move from JWT sessions to OIDC with Keycloak.', column: 'inprogress', tags: ['job_search'] },
-  { id: 7, title: 'Dashboard performance audit', desc: 'Profile slow queries and optimize the main dashboard render path.', column: 'inprogress', tags: ['job_search'] },
-  { id: 8, title: 'User profile page updates', desc: 'New avatar upload + bio section. Awaiting design specs.', column: 'review', tags: ['website'] },
-  { id: 9, title: 'Email notification preferences', desc: 'Allow users to toggle individual notification types.', column: 'done', tags: ['outreach'] },
-  { id: 10, title: 'Quarterly accessibility audit', desc: 'Full WCAG 2.2 AA scan across all public pages.', column: 'done', tags: ['cv_portfolio_linkedin'] }
+  { id: 1, title: 'Research competitor landing pages', desc: 'Audit top 5 competitor homepages and extract key messaging patterns.', column: 'backlog', tags: ['outreach'], position: 0 },
+  { id: 2, title: 'Design system token refresh', desc: 'Update color and spacing tokens for v3 design system.', column: 'backlog', tags: ['website'], position: 1 },
+  { id: 3, title: 'Onboarding flow redesign', desc: 'Redesign the first-time user experience to improve activation rate.', column: 'todo', tags: ['website'], position: 0 },
+  { id: 4, title: 'Fix dark mode contrast', desc: 'WCAG AA violations on dashboard cards.', column: 'todo', tags: ['website'], position: 1 },
+  { id: 5, title: 'API rate limiting middleware', desc: 'Add token bucket limiter to all public endpoints.', column: 'inprogress', tags: ['job_search'], position: 0 },
+  { id: 6, title: 'Auth service migration', desc: 'Move from JWT sessions to OIDC with Keycloak.', column: 'inprogress', tags: ['job_search'], position: 1 },
+  { id: 7, title: 'Dashboard performance audit', desc: 'Profile slow queries and optimize the main dashboard render path.', column: 'inprogress', tags: ['job_search'], position: 2 },
+  { id: 8, title: 'User profile page updates', desc: 'New avatar upload + bio section. Awaiting design specs.', column: 'review', tags: ['website'], position: 0 },
+  { id: 9, title: 'Email notification preferences', desc: 'Allow users to toggle individual notification types.', column: 'done', tags: ['outreach'], position: 0 },
+  { id: 10, title: 'Quarterly accessibility audit', desc: 'Full WCAG 2.2 AA scan across all public pages.', column: 'done', tags: ['cv_portfolio_linkedin'], position: 1 }
 ];
 
 function init() {
   const saved = localStorage.getItem('kanban-tasks');
   tasks = saved ? JSON.parse(saved) : DEFAULT_TASKS.map(t => ({...t}));
+
   if (!tasks.find(t => t.title === 'Connect Claude to LinkedIn to search for jobs')) {
-    tasks.push({ id: Date.now(), title: 'Connect Claude to LinkedIn to search for jobs', desc: 'Get Claude to connect to LinkedIn and automate job searching.', column: 'todo', tags: ['job_search'] });
-    save();
+    tasks.push({ id: Date.now(), title: 'Connect Claude to LinkedIn to search for jobs', desc: 'Get Claude to connect to LinkedIn and automate job searching.', column: 'todo', tags: ['job_search'], position: 0 });
   }
+
+  let needsSave = false;
+  if (tasks.some(t => t.position === undefined)) {
+    tasks.forEach(t => { if (t.position === undefined) t.position = 0; });
+    const cols = [...new Set(tasks.map(t => t.column))];
+    cols.forEach(c => {
+      const colTasks = tasks.filter(t => t.column === c).sort((a, b) => a.position - b.position || a.id - b.id);
+      colTasks.forEach((t, i) => t.position = i);
+    });
+    needsSave = true;
+  }
+  if (needsSave) save();
 
   renderTags();
   renderBoard();
@@ -289,7 +301,7 @@ function getSelectedTags() {
 function renderBoard() {
   const board = document.getElementById('board');
   board.innerHTML = COLUMNS.map(col => {
-    const colTasks = tasks.filter(t => t.column === col.id);
+    const colTasks = tasks.filter(t => t.column === col.id).sort((a, b) => a.position - b.position);
     return `
       <div class="column">
         <div class="column-header">
@@ -371,7 +383,8 @@ function saveTask() {
     t.tags = tags;
   } else {
     const newId = tasks.reduce((max, t) => Math.max(max, t.id), 0) + 1;
-    tasks.push({ id: newId, title, desc, column, tags });
+    const maxPos = tasks.filter(t => t.column === column).reduce((max, t) => Math.max(max, t.position), -1);
+    tasks.push({ id: newId, title, desc, column, tags, position: maxPos + 1 });
   }
 
   save();
@@ -418,10 +431,36 @@ function onDragLeave(e) {
 
 function onDrop(e, columnId) {
   e.preventDefault();
-  e.target.closest('.column-body')?.classList.remove('drag-over');
+  const columnBody = e.target.closest('.column-body');
+  if (!columnBody) return;
+  columnBody.classList.remove('drag-over');
   if (!draggedCard) return;
-  const t = tasks.find(x => x.id === draggedCard);
-  if (t) { t.column = columnId; save(); renderBoard(); }
+
+  const task = tasks.find(x => x.id === draggedCard);
+  if (!task) return;
+
+  task.column = columnId;
+
+  const colTasks = tasks.filter(x => x.column === columnId && x.id !== draggedCard).sort((a, b) => a.position - b.position);
+  const cards = [...columnBody.querySelectorAll('.card')].filter(el => parseInt(el.dataset.id) !== draggedCard);
+  const mouseY = e.clientY;
+
+  let insertIdx = colTasks.length;
+  for (let i = 0; i < cards.length; i++) {
+    const rect = cards[i].getBoundingClientRect();
+    const mid = rect.top + rect.height / 2;
+    if (mouseY < mid) {
+      const cardId = parseInt(cards[i].dataset.id);
+      const found = colTasks.findIndex(x => x.id === cardId);
+      if (found >= 0) insertIdx = found;
+      break;
+    }
+  }
+
+  colTasks.splice(insertIdx, 0, task);
+  colTasks.forEach((t, i) => t.position = i);
+  save();
+  renderBoard();
 }
 
 init();
